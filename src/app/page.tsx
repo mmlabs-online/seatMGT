@@ -1,65 +1,92 @@
-import Image from "next/image";
+"use client";
 
-export default function Home() {
+import { useMemo, useState } from "react";
+import { useAppStore } from "@/store/AppStore";
+import { FilterChips, type ChipOption } from "@/components/ui";
+import { StatCard } from "@/components/dashboard/StatCard";
+import { RoomCard } from "@/components/dashboard/RoomCard";
+import { OccupancyRing } from "@/components/dashboard/OccupancyRing";
+
+export default function DashboardPage() {
+  const store = useAppStore();
+  const [floor, setFloor] = useState<string>("all");
+
+  const totals = useMemo(() => {
+    const totalSeats = store.rooms.reduce((n, r) => n + r.layout.seatCount, 0);
+    const occupied = store.seats.filter((s) => s.occupantMemberId).length;
+    const placed = store.devices.filter((d) => d.seatId).length;
+    const inventory = store.devices.length - placed;
+    const rate = totalSeats ? Math.round((occupied / totalSeats) * 100) : 0;
+    return { totalSeats, occupied, placed, inventory, rate };
+  }, [store.rooms, store.seats, store.devices]);
+
+  const floors = useMemo(
+    () => Array.from(new Set(store.rooms.map((r) => r.floor))).sort(),
+    [store.rooms],
+  );
+  const floorOptions: ChipOption<string>[] = [
+    { value: "all", label: "All floors" },
+    ...floors.map((f) => ({ value: f, label: f })),
+  ];
+  const visibleRooms = store.rooms.filter((r) => floor === "all" || r.floor === floor);
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
+    <div className="relative px-6 md:px-7 pt-7 pb-12 max-w-[1120px] mx-auto">
+      <div className="blob w-72 h-72 -top-16 right-0" style={{ background: "var(--accent-orange)", opacity: 0.06 }} aria-hidden />
+
+      <h1 className="m-0 mb-1 text-[28px] font-extrabold tracking-[-0.01em] text-on-surface">
+        Overview
+      </h1>
+      <p className="m-0 mb-6 text-sm text-on-surface-variant">
+        Seats, ports and equipment across Building C.
+      </p>
+
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(210px,1fr))] gap-4 mb-7">
+        <StatCard icon="meeting_room" value={String(store.rooms.length)} label="Rooms" badge="Bldg C" />
+        <StatCard
+          icon="chair"
+          value={String(totals.totalSeats)}
+          label="Seats / ports"
+          badge={`${totals.occupied} used`}
+          iconBg="var(--secondary-container)"
+          iconFg="var(--on-secondary-container)"
         />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
+        <StatCard
+          icon="donut_large"
+          value={`${totals.rate}%`}
+          label="Occupancy rate"
+          iconBg="var(--tertiary-container)"
+          iconFg="var(--on-tertiary-container)"
+        >
+          <OccupancyRing pct={totals.rate} />
+        </StatCard>
+        <StatCard
+          icon="lan"
+          value={`${totals.placed} / ${totals.inventory}`}
+          label="Placed / in inventory"
+          badge={`${store.devices.length} total`}
+        />
+      </div>
+
+      <div className="flex items-center justify-between gap-3 mb-3.5 flex-wrap">
+        <h2 className="m-0 text-[18px] font-extrabold text-on-surface">Rooms</h2>
+        <FilterChips
+          ariaLabel="Filter rooms by floor"
+          options={floorOptions}
+          value={floor}
+          onChange={setFloor}
+        />
+      </div>
+
+      <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-4">
+        {visibleRooms.map((room) => (
+          <RoomCard
+            key={room.id}
+            room={room}
+            occupied={store.seatsForRoom(room.id).filter((s) => s.occupantMemberId).length}
+          />
+        ))}
+      </div>
     </div>
   );
 }
