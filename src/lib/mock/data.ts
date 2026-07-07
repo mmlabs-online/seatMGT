@@ -35,7 +35,8 @@ export const rooms: Room[] = [
     name: "Engineering Bay",
     description: "Main engineering floor — each seat maps to one network port.",
     floor: "Floor 3",
-    layout: { podCols: 3, seatCount: 24 },
+    layout: { podCols: 3, podRows: 2, seatCount: 24 },
+    features: [],
   },
   {
     id: "r-c310",
@@ -43,7 +44,8 @@ export const rooms: Room[] = [
     name: "Product Studio",
     description: "Product, design and research pods.",
     floor: "Floor 3",
-    layout: { podCols: 2, seatCount: 16 },
+    layout: { podCols: 2, podRows: 2, seatCount: 16 },
+    features: [],
   },
   {
     id: "r-d145",
@@ -51,7 +53,8 @@ export const rooms: Room[] = [
     name: "Ops Room",
     description: "Operations and on-call desks.",
     floor: "Floor 1",
-    layout: { podCols: 3, seatCount: 12 },
+    layout: { podCols: 3, podRows: 1, seatCount: 12 },
+    features: [],
   },
 ];
 
@@ -68,7 +71,7 @@ export const members: Member[] = [
   { id: "m9", name: "Dennis Ritchie", employeeCode: "EMP-009", role: "user", groupId: "g-platform" },
   { id: "m10", name: "Barbara Liskov", employeeCode: "EMP-010", role: "user", groupId: "g-design" },
   { id: "m11", name: "Jeff Dean", employeeCode: "EMP-011", role: "manager", groupId: "g-platform" },
-  { id: "m12", name: "Radia Perlman", employeeCode: "EMP-012", role: "viewer", groupId: "g-data" },
+  { id: "m12", name: "Radia Perlman", employeeCode: "EMP-012", role: "user", groupId: "g-data" },
   { id: "m13", name: "Sophie Wilson", employeeCode: "EMP-013", role: "user", groupId: "g-design" },
   { id: "m14", name: "Frances Allen", employeeCode: "EMP-014", role: "user", groupId: "g-qa" },
   { id: "m15", name: "Ken Thompson", employeeCode: "EMP-015", role: "user", groupId: "g-platform" },

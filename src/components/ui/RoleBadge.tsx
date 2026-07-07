@@ -4,12 +4,6 @@ const ROLE_STYLES: Record<
   Role,
   { bg: string; fg: string; border: string; label: string; glow?: string }
 > = {
-  viewer: {
-    bg: "var(--surface-container-highest)",
-    fg: "var(--on-surface-variant)",
-    border: "var(--outline-variant)",
-    label: "Viewer",
-  },
   user: {
     bg: "var(--secondary-container)",
     fg: "var(--on-secondary-container)",

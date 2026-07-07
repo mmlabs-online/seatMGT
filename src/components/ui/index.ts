@@ -5,3 +5,4 @@ export { FilledInput } from "./FilledInput";
 export { Card } from "./Card";
 export { Avatar } from "./Avatar";
 export { RoleBadge } from "./RoleBadge";
+export { EntityFormDialog, DialogField, DialogSelect } from "./EntityFormDialog";

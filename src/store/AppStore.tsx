@@ -1,13 +1,12 @@
 "use client";
 
 /**
- * Client-side store. Holds the runtime-mutable dataset seeded from the async
- * data layer, plus the demoed role and the light/dark theme. Every screen
- * reads from here so mutations (assign seat, place device, switch role) stay
- * consistent across route changes without a DB.
- *
- * Swap plan: the seed comes from `getInitialData()`; the mutations below become
- * server actions / API calls later. Components keep using these selectors.
+ * Client-side store. Reads the request-scoped dataset seeded from the async
+ * data layer (now Prisma-backed) and exposes the same lookups/selectors every
+ * screen already used. Mutations call server actions; each action calls
+ * `refresh()` server-side, which re-runs the (app) layout and feeds fresh
+ * `initial` props back down here — so no local optimistic copies are kept for
+ * server-owned collections. Only the theme toggle is genuinely client state.
  */
 import {
   createContext,
@@ -18,18 +17,24 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import type {
-  Device,
-  DeviceRole,
-  Group,
-  Member,
-  Project,
-  Role,
-  Room,
-  Seat,
-} from "@/types";
-import { ROLE_RANK, seatStatus } from "@/types";
+import type { Device, Group, Member, Project, Role, Room, RoomFeatureType, Seat, SeatRequest } from "@/types";
+import { ROLE_RANK } from "@/types";
 import type { InitialData } from "@/lib/data";
+import { assignOccupant as assignOccupantAction, unassignOccupant as unassignOccupantAction } from "@/lib/actions/seats";
+import { createSeatRequest } from "@/lib/actions/requests";
+import { placeDevice as placeDeviceAction, moveDevice as moveDeviceAction } from "@/lib/actions/devices";
+import {
+  saveSeatPositions,
+  createSeat,
+  deleteSeat,
+  createRoom as createRoomAction,
+  addRoomRow as addRoomRowAction,
+  addRoomColumn as addRoomColumnAction,
+  addRoomFeature as addRoomFeatureAction,
+  moveRoomFeature as moveRoomFeatureAction,
+  deleteRoomFeature as deleteRoomFeatureAction,
+  type RoomInput,
+} from "@/lib/actions/rooms";
 
 type Theme = "light" | "dark";
 
@@ -45,6 +50,7 @@ interface AppStoreValue {
   role: Role;
   rank: number;
   theme: Theme;
+  pendingRequests: SeatRequest[];
 
   // lookups
   roomByCode: (code: string) => Room | undefined;
@@ -58,18 +64,40 @@ interface AppStoreValue {
   projectById: (id?: string) => Project | undefined;
   seatsOccupiedBy: (memberId: string) => number;
   devicesOwnedBy: (memberId: string) => number;
+  pendingRequestForSeat: (seatId: string) => SeatRequest | undefined;
 
-  // mutations (local-only for this UI pass)
-  setRole: (role: Role) => void;
+  // mutations (server actions under the hood)
   toggleTheme: () => void;
-  assignOccupant: (seatId: string, memberId: string) => void;
-  registerSelf: (seatId: string) => void;
-  removeOccupant: (seatId: string) => void;
-  placeDevice: (seatId: string, deviceId: string) => void;
-  removeDevice: (deviceId: string) => void;
+  assignOccupant: (seatId: string, memberId: string) => Promise<void>;
+  requestSeat: (seatId: string) => Promise<void>;
+  removeOccupant: (seatId: string) => Promise<void>;
+  placeDevice: (seatId: string, deviceId: string) => Promise<void>;
+  removeDevice: (deviceId: string) => Promise<void>;
+
+  // layout designer (Admin only — re-enforced server-side regardless of role here)
+  moveSeat: (seatId: string, posX: number, posY: number) => Promise<void>;
+  addRoom: (input: RoomInput) => Promise<void>;
+  addSeat: (roomId: string) => Promise<void>;
+  deleteSeatAdmin: (seatId: string) => Promise<void>;
+  addRoomRow: (roomId: string) => Promise<void>;
+  addRoomColumn: (roomId: string) => Promise<void>;
+  addRoomFeature: (roomId: string, type: RoomFeatureType) => Promise<void>;
+  moveRoomFeature: (roomId: string, featureId: string, posX: number, posY: number) => Promise<void>;
+  deleteRoomFeature: (roomId: string, featureId: string) => Promise<void>;
 }
 
 const AppStoreContext = createContext<AppStoreValue | null>(null);
+
+/** No existing error-surface component covers action rejects (permission
+ * denials, "primary must be owned by the occupant", etc.) — a plain alert is
+ * the minimal, non-restyling way to surface them for this pass. */
+async function runAction(fn: () => Promise<void>) {
+  try {
+    await fn();
+  } catch (err) {
+    window.alert(err instanceof Error ? err.message : "That action failed.");
+  }
+}
 
 export function AppStoreProvider({
   initial,
@@ -78,18 +106,11 @@ export function AppStoreProvider({
   initial: InitialData;
   children: ReactNode;
 }) {
-  const [rooms] = useState<Room[]>(initial.rooms);
-  const [groups] = useState<Group[]>(initial.groups);
-  const [projects] = useState<Project[]>(initial.projects);
-  const [members] = useState<Member[]>(initial.members);
-  const [seats, setSeats] = useState<Seat[]>(initial.seats);
-  const [devices, setDevices] = useState<Device[]>(initial.devices);
-  const [role, setRole] = useState<Role>(initial.currentUser.role);
+  const { rooms, groups, projects, members, seats, devices, pendingRequests, currentUser: currentUserWrapper } = initial;
+  const currentUser = currentUserWrapper.member;
+  const role = currentUserWrapper.role;
   const [theme, setTheme] = useState<Theme>("light");
 
-  const currentUser = initial.currentUser.member;
-
-  // Reflect the theme onto <html data-theme> so the MD3 token layer swaps.
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
   }, [theme]);
@@ -117,6 +138,8 @@ export function AppStoreProvider({
       seats.filter((s) => s.occupantMemberId === memberId).length;
     const devicesOwnedBy = (memberId: string) =>
       devices.filter((d) => d.ownerMemberId === memberId).length;
+    const pendingRequestForSeat = (seatId: string) =>
+      pendingRequests.find((r) => r.seatId === seatId);
 
     return {
       rooms,
@@ -129,6 +152,7 @@ export function AppStoreProvider({
       role,
       rank: ROLE_RANK[role],
       theme,
+      pendingRequests,
 
       roomByCode,
       roomById,
@@ -141,84 +165,53 @@ export function AppStoreProvider({
       projectById,
       seatsOccupiedBy,
       devicesOwnedBy,
+      pendingRequestForSeat,
 
-      setRole,
       toggleTheme: () => setTheme((t) => (t === "light" ? "dark" : "light")),
 
       assignOccupant: (seatId, memberId) =>
-        setSeats((prev) =>
-          prev.map((s) =>
-            s.id === seatId
-              ? {
-                  ...s,
-                  occupantMemberId: memberId,
-                  status: seatStatus(memberId),
-                  groupId: memberById(memberId)?.groupId ?? s.groupId,
-                }
-              : s,
-          ),
-        ),
+        runAction(() => assignOccupantAction(seatId, memberId)),
 
-      registerSelf: (seatId) =>
-        setSeats((prev) =>
-          prev.map((s) =>
-            s.id === seatId
-              ? {
-                  ...s,
-                  occupantMemberId: currentUser.id,
-                  status: "occupied",
-                  groupId: currentUser.groupId ?? s.groupId,
-                }
-              : s,
-          ),
-        ),
+      requestSeat: (seatId) => runAction(() => createSeatRequest(seatId)),
 
-      // Clearing an occupant returns any primary device to inventory, since a
-      // primary must be owned by the seat's occupant.
-      removeOccupant: (seatId) => {
-        setDevices((prev) =>
-          prev.map((d) =>
-            d.seatId === seatId && d.role === "primary"
-              ? { ...d, seatId: null }
-              : d,
-          ),
-        );
-        setSeats((prev) =>
-          prev.map((s) =>
-            s.id === seatId
-              ? { ...s, occupantMemberId: undefined, status: "empty", projectId: undefined }
-              : s,
-          ),
-        );
-      },
+      removeOccupant: (seatId) => runAction(() => unassignOccupantAction(seatId)),
 
       // Placing from inventory attaches as a borrowed secondary device.
       placeDevice: (seatId, deviceId) =>
-        setDevices((prev) =>
-          prev.map((d) =>
-            d.id === deviceId ? { ...d, seatId, role: "secondary" as DeviceRole } : d,
-          ),
-        ),
+        runAction(() => placeDeviceAction(deviceId, seatId, "SECONDARY")),
 
-      removeDevice: (deviceId) =>
-        setDevices((prev) =>
-          prev.map((d) =>
-            d.id === deviceId ? { ...d, seatId: null } : d,
-          ),
-        ),
+      removeDevice: (deviceId) => runAction(() => moveDeviceAction(deviceId, null)),
+
+      moveSeat: (seatId, posX, posY) =>
+        runAction(() => saveSeatPositions([{ id: seatId, posX, posY }])),
+
+      // Declares the room, then populates it with `seatCount` real seats
+      // (one createSeat call per seat, auto-positioned pod by pod) so the
+      // layout is immediately usable instead of just a capacity number.
+      addRoom: (input) =>
+        runAction(async () => {
+          const room = await createRoomAction(input);
+          for (let i = 0; i < input.seatCount; i++) {
+            await createSeat(room.id);
+          }
+        }),
+
+      addSeat: (roomId) => runAction(() => createSeat(roomId).then(() => {})),
+
+      deleteSeatAdmin: (seatId) => runAction(() => deleteSeat(seatId)),
+
+      addRoomRow: (roomId) => runAction(() => addRoomRowAction(roomId)),
+
+      addRoomColumn: (roomId) => runAction(() => addRoomColumnAction(roomId)),
+
+      addRoomFeature: (roomId, type) => runAction(() => addRoomFeatureAction(roomId, type)),
+
+      moveRoomFeature: (roomId, featureId, posX, posY) =>
+        runAction(() => moveRoomFeatureAction(roomId, featureId, posX, posY)),
+
+      deleteRoomFeature: (roomId, featureId) => runAction(() => deleteRoomFeatureAction(roomId, featureId)),
     };
-  }, [
-    rooms,
-    seats,
-    devices,
-    members,
-    groups,
-    projects,
-    currentUser,
-    role,
-    theme,
-    memberById,
-  ]);
+  }, [rooms, seats, devices, members, groups, projects, pendingRequests, currentUser, role, theme, memberById]);
 
   return (
     <AppStoreContext.Provider value={value}>
@@ -233,17 +226,4 @@ export function useAppStore(): AppStoreValue {
     throw new Error("useAppStore must be used within <AppStoreProvider>");
   }
   return ctx;
-}
-
-/** Shared helpers used across screens. */
-export function initials(name: string): string {
-  const parts = name.replace(/\(.*\)/, "").trim().split(/\s+/);
-  return (
-    ((parts[0]?.[0] ?? "") + (parts[1]?.[0] ?? "")).toUpperCase() || "?"
-  );
-}
-
-export function lastName(name: string): string {
-  const parts = name.replace(/\(.*\)/, "").trim().split(/\s+/);
-  return parts[parts.length - 1] ?? name;
 }

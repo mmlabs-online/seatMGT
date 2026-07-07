@@ -3,15 +3,18 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useAppStore, initials } from "@/store/AppStore";
+import { useAppStore } from "@/store/AppStore";
+import { initials } from "@/lib/format";
+import { authClient } from "@/lib/auth/client";
+import { ROLE_RANK } from "@/types";
 import { Icon, IconButton, RoleBadge } from "@/components/ui";
-import { RoleSwitcher } from "./RoleSwitcher";
 
 interface NavItem {
   href: string;
   label: string;
   icon: string;
   match: (path: string) => boolean;
+  minRank?: number;
 }
 
 const NAV: NavItem[] = [
@@ -19,14 +22,27 @@ const NAV: NavItem[] = [
   { href: "/rooms", label: "Rooms", icon: "grid_view", match: (p) => p.startsWith("/rooms") },
   { href: "/devices", label: "Devices", icon: "lan", match: (p) => p.startsWith("/devices") },
   { href: "/members", label: "Members", icon: "group", match: (p) => p.startsWith("/members") },
-  { href: "/login", label: "Login", icon: "login", match: (p) => p.startsWith("/login") },
+  {
+    href: "/approvals",
+    label: "Approvals",
+    icon: "fact_check",
+    match: (p) => p.startsWith("/approvals"),
+    minRank: ROLE_RANK.manager,
+  },
 ];
 
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
-  const { rooms, currentUser, role, theme, toggleTheme, groupById } = useAppStore();
+  const { rooms, currentUser, role, rank, theme, toggleTheme, groupById } = useAppStore();
   const group = groupById(currentUser.groupId);
+  const navItems = NAV.filter((item) => item.minRank === undefined || rank >= item.minRank);
+
+  const logout = async () => {
+    await authClient.signOut();
+    router.push("/login");
+    router.refresh();
+  };
 
   // Derive a "current" room for the switcher: whichever room the URL is on, else the first.
   const activeRoomCode =
@@ -50,7 +66,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           </div>
         </div>
         <div className="flex md:flex-col gap-1.5 w-full justify-around md:justify-start">
-          {NAV.map((item) => {
+          {navItems.map((item) => {
             const active = item.match(pathname);
             return (
               <Link
@@ -114,13 +130,13 @@ export function AppShell({ children }: { children: ReactNode }) {
             </label>
           )}
 
-          <RoleSwitcher compact />
-
           <IconButton
             icon={theme === "light" ? "dark_mode" : "light_mode"}
             label="Toggle theme"
             onClick={toggleTheme}
           />
+
+          <IconButton icon="logout" label="Log out" onClick={logout} />
 
           <div className="flex items-center gap-2 flex-none">
             <span

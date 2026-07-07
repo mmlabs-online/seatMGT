@@ -6,14 +6,13 @@
  * later, only `src/lib/data` changes — these shapes stay put.
  */
 
-export type Role = "viewer" | "user" | "manager" | "admin";
+export type Role = "user" | "manager" | "admin";
 
 /** Numeric rank used for UI gating (higher = more capable). */
 export const ROLE_RANK: Record<Role, number> = {
-  viewer: 0,
-  user: 1,
-  manager: 2,
-  admin: 3,
+  user: 0,
+  manager: 1,
+  admin: 2,
 };
 
 export interface Member {
@@ -43,8 +42,21 @@ export interface Project {
 export interface RoomLayout {
   /** Number of 2x2 pods per row. */
   podCols: number;
-  /** Total seats (must be a multiple of 4 for clean pods). */
+  /** Number of 2x2 pod rows the room has available (its "walls") — the room's
+   * capacity, independent of how many seats have actually been placed. */
+  podRows: number;
+  /** Actual number of placed seats (must be a multiple of 4 for clean pods). */
   seatCount: number;
+}
+
+export type RoomFeatureType = "door" | "window";
+
+/** A movable, addable canvas marker (door / window) drawn on the room layout. */
+export interface RoomFeature {
+  id: string;
+  type: RoomFeatureType;
+  posX: number;
+  posY: number;
 }
 
 export interface Room {
@@ -54,6 +66,7 @@ export interface Room {
   description?: string;
   floor: string;
   layout: RoomLayout;
+  features: RoomFeature[];
 }
 
 export type SeatStatus = "empty" | "occupied";
@@ -101,6 +114,21 @@ export interface Device {
 export interface CurrentUser {
   member: Member;
   role: Role;
+}
+
+export type RequestStatus = "pending" | "approved" | "rejected" | "cancelled";
+
+/** A User's request to occupy a seat, awaiting Manager/Admin approval. */
+export interface SeatRequest {
+  id: string;
+  status: RequestStatus;
+  subjectMemberId: string;
+  seatId: string;
+  createdByMemberId: string;
+  decidedByMemberId?: string;
+  note?: string;
+  decidedAt?: string;
+  createdAt: string;
 }
 
 /** Business rule: status is derived, never stored. */

@@ -1,9 +1,6 @@
 import type { Metadata } from "next";
 import { Manrope, Poppins } from "next/font/google";
 import "./globals.css";
-import { getInitialData } from "@/lib/data";
-import { AppStoreProvider } from "@/store/AppStore";
-import { AppShell } from "@/components/shell/AppShell";
 
 // Primary UI face (Gilroy stand-in; also used for tabular metric numerals).
 const manrope = Manrope({
@@ -24,12 +21,14 @@ export const metadata: Metadata = {
   description: "Track seats, network ports and equipment across the campus.",
 };
 
-export default async function RootLayout({
+/**
+ * Kept thin on purpose: `/login` renders under here too, and shouldn't need a
+ * session or seeded app data. The authenticated shell (AppStoreProvider +
+ * AppShell) lives in `(app)/layout.tsx`.
+ */
+export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
-  // Seed the client store from the async data layer (the future swap seam).
-  const initial = await getInitialData();
-
   return (
     <html
       lang="en"
@@ -46,11 +45,7 @@ export default async function RootLayout({
           rel="stylesheet"
         />
       </head>
-      <body>
-        <AppStoreProvider initial={initial}>
-          <AppShell>{children}</AppShell>
-        </AppStoreProvider>
-      </body>
+      <body>{children}</body>
     </html>
   );
 }

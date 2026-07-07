@@ -1,15 +1,30 @@
 "use client";
 
 import type { Device } from "@/types";
-import { useAppStore, initials } from "@/store/AppStore";
+import { useAppStore } from "@/store/AppStore";
+import { initials } from "@/lib/format";
 import { Icon } from "@/components/ui";
 import { deviceIcon } from "@/lib/icons";
 
-const COLS = "grid grid-cols-[2.2fr_1.1fr_1.4fr_1.4fr_1fr] gap-3";
+const COLS = "grid grid-cols-[2.2fr_1.1fr_1.4fr_1.4fr_1fr_auto] gap-3";
 
-/** MD3 device table. Horizontally scrolls on narrow screens. */
-export function DeviceTable({ devices }: { devices: Device[] }) {
+/**
+ * MD3 device table. Horizontally scrolls on narrow screens. Read/columns are
+ * unchanged; the trailing actions column only renders edit/delete for a device
+ * the current user may manage (admin, or the device's own owner) — mirroring
+ * the server's `assertOwnsOrAdmin`. Buttons appear only when handlers are given.
+ */
+export function DeviceTable({
+  devices,
+  onEdit,
+  onDelete,
+}: {
+  devices: Device[];
+  onEdit?: (device: Device) => void;
+  onDelete?: (device: Device) => void;
+}) {
   const store = useAppStore();
+  const canManage = (d: Device) => store.role === "admin" || d.ownerMemberId === store.currentUser.id;
   return (
     <div className="border border-outline-variant rounded-md3-lg overflow-hidden bg-surface-low shadow-[var(--card-shadow)]">
       <div className="overflow-x-auto">
@@ -22,6 +37,7 @@ export function DeviceTable({ devices }: { devices: Device[] }) {
             <span>Owner</span>
             <span>MAC · Inventory</span>
             <span>Location</span>
+            <span className="sr-only">Actions</span>
           </div>
 
           {devices.length === 0 && (
@@ -92,6 +108,35 @@ export function DeviceTable({ devices }: { devices: Device[] }) {
                   }}
                 >
                   {placed ? seat!.code : "Inventory"}
+                </span>
+
+                <span className="flex items-center gap-1 justify-end">
+                  {(onEdit || onDelete) && canManage(d) ? (
+                    <>
+                      {onEdit && (
+                        <button
+                          type="button"
+                          onClick={() => onEdit(d)}
+                          aria-label={`Edit ${d.name}`}
+                          title="Edit device"
+                          className="state-layer w-9 h-9 rounded-md3-sm text-on-surface-variant hover:text-primary flex items-center justify-center cursor-pointer flex-none"
+                        >
+                          <Icon name="edit" size={18} />
+                        </button>
+                      )}
+                      {onDelete && (
+                        <button
+                          type="button"
+                          onClick={() => onDelete(d)}
+                          aria-label={`Delete ${d.name}`}
+                          title="Delete device"
+                          className="state-layer w-9 h-9 rounded-md3-sm text-on-surface-variant hover:text-status-alert flex items-center justify-center cursor-pointer flex-none"
+                        >
+                          <Icon name="delete" size={18} />
+                        </button>
+                      )}
+                    </>
+                  ) : null}
                 </span>
               </div>
             );

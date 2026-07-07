@@ -1,0 +1,365 @@
+// ============================================================================
+// Seat & Device Tracker — Prisma schema
+// PostgreSQL. Reflects all locked decisions from design phase.
+//
+// Locked rules encoded here:
+//  - 3 roles, global (Admin / Manager / User)
+//  - Room -> Seat (seat.code = room.code + seqNo, e.g. "C302-01")
+//  - Seat status derived from occupant (empty | occupied) — stored as enum but
+//    the source of truth is occupantMemberId; keep them consistent in app logic.
+//  - One person occupies many seats; a seat has at most one occupant.
+//  - Device: exactly one owner, at most one seat; a seat has 1 primary + N secondary.
+//  - Device can be unassigned (in inventory): seatId = null.
+//  - Primary device must be owned by the current occupant (enforced in app logic).
+//  - Seat request/approval flow: User requests -> Manager/Admin approves.
+//  - Group / Project are informational labels only (no access constraint).
+//
+// Additive changes on top of the originally provided schema (see backend plan):
+//  - Account gains name/emailVerified/image so Better Auth's Prisma adapter can
+//    map its `user` model directly onto Account (modelName: "Account").
+//  - Session / Verification / AuthCredential are Better Auth's own storage
+//    models (AuthCredential = Better Auth's "account" model, renamed to avoid
+//    colliding with our domain Account).
+//  - Group gains `color` (purely cosmetic — avatar/tag tinting).
+//  - Room.layoutMeta carries { podCols, seatCount, floor } for the frontend's
+//    RoomLayout/floor fields, which have no dedicated columns here.
+// ============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum Role {
+  USER
+  MANAGER
+  ADMIN
+}
+
+enum SeatStatus {
+  EMPTY
+  OCCUPIED
+}
+
+enum DeviceRole {
+  PRIMARY
+  SECONDARY
+}
+
+enum RequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+// ---------------------------------------------------------------------------
+// Identity: Account (login) <-> Member (person)
+// Better Auth manages sessions/credentials; we keep app-facing role on Account.
+// Better Auth's Prisma adapter `user` model is mapped onto this model.
+// ---------------------------------------------------------------------------
+
+model Account {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String?
+  role         Role     @default(USER)
+  isActive     Boolean  @default(true)
+
+  // Better Auth core user fields (adapter maps its `user` model here).
+  name          String  @default("")
+  emailVerified Boolean @default(false)
+  image         String?
+
+  // 1:1 optional link to the person this login represents
+  member   Member? @relation(fields: [memberId], references: [id])
+  memberId String? @unique
+
+  sessions        Session[]
+  authCredentials AuthCredential[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([role])
+}
+
+// Better Auth's own session storage (modelName: "Session").
+model Session {
+  id        String   @id @default(cuid())
+  account   Account  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String
+  expiresAt DateTime
+  token     String   @unique
+  ipAddress String?
+  userAgent String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+}
+
+// Better Auth's own credential/provider-link storage (its default model is
+// named "account"; renamed here to avoid colliding with our domain Account).
+model AuthCredential {
+  id     String  @id @default(cuid())
+  account Account @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+
+  providerId String
+  accountId  String
+
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+}
+
+// Better Auth's own verification-token storage (modelName: "Verification").
+model Verification {
+  id         String   @id @default(cuid())
+  identifier String
+  value      String
+  expiresAt  DateTime
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([identifier])
+}
+
+model Member {
+  id           String  @id @default(cuid())
+  name         String
+  employeeCode String? @unique
+
+  // The person's org group (informational only — independent of seat.groupId,
+  // which is inherited from the occupant at assign time but can be overridden).
+  group   Group?  @relation(fields: [groupId], references: [id])
+  groupId String?
+
+  account Account?
+
+  // A person can occupy many seats
+  occupiedSeats Seat[] @relation("SeatOccupant")
+
+  // A person owns many devices
+  devices Device[] @relation("DeviceOwner")
+
+  // Requests this member is the subject of (the person to be seated)
+  seatRequests SeatRequest[] @relation("RequestSubject")
+
+  // Requests this member created / decided (audit convenience)
+  requestsCreated  SeatRequest[] @relation("RequestCreatedBy")
+  requestsDecided  SeatRequest[] @relation("RequestDecidedBy")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([name])
+  @@index([groupId])
+}
+
+// ---------------------------------------------------------------------------
+// Physical structure: Room -> Seat
+// ---------------------------------------------------------------------------
+
+model Room {
+  id          String  @id @default(cuid())
+  code        String  @unique            // "C302"
+  name        String
+  description String?
+
+  // Freeform layout metadata: { podCols, seatCount, floor } for the frontend.
+  layoutMeta Json?
+
+  // Additive (Room Layout Editor / edit-new): non-seat grid fixtures
+  // (doors, stairs, meeting-room blocks, etc.). JSON array of Fixture objects
+  // — see src/lib/data/roomLayout.ts for the element shape. Independent of the
+  // existing pod-based layoutMeta used by the original room view.
+  layoutFixtures Json @default("[]")
+
+  seats Seat[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Seat {
+  id     String @id @default(cuid())
+  code   String @unique                  // "C302-01" = room.code + seqNo
+  seqNo  Int                             // sequence within the room
+  room   Room   @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  roomId String
+
+  status SeatStatus @default(EMPTY)
+
+  // Occupant (at most one). Null => EMPTY. Keep status in sync in app logic.
+  occupant   Member? @relation("SeatOccupant", fields: [occupantMemberId], references: [id])
+  occupantMemberId String?
+
+  // Informational labels only
+  group     Group?   @relation(fields: [groupId], references: [id])
+  groupId   String?
+  project   Project? @relation(fields: [projectId], references: [id])
+  projectId String?
+
+  // Position on the room layout canvas
+  posX Float @default(0)
+  posY Float @default(0)
+
+  // Additive (Room Layout Editor / edit-new): grid cell position + span.
+  // Nullable/defaulted so every existing seat stays valid without backfill;
+  // the editor falls back to a seqNo-derived cell when col/row are null.
+  // `cannotSeat` marks a port that must not receive an occupant — it does NOT
+  // change derived status (an empty seat stays empty), it's an availability hint.
+  col        Int?
+  row        Int?
+  colSpan    Int     @default(1)
+  rowSpan    Int     @default(1)
+  cannotSeat Boolean @default(false)
+
+  // Additive (Room Layout Editor v2 — free-form): continuous canvas coords +
+  // rotation + optional size. Seeded from posX/posY on first open (see
+  // src/lib/data/roomLayout.ts) so the old arrangement transfers 1:1; owned by
+  // the free-form editor thereafter. posX/posY and col/row are left intact so
+  // the original editor keeps working on its own fields.
+  x        Float?
+  y        Float?
+  rotation Float  @default(0)
+  w        Float?
+  h        Float?
+
+  devices      Device[]
+  seatRequests SeatRequest[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([roomId, seqNo])             // no duplicate sequence within a room
+  @@index([occupantMemberId])
+  @@index([status])
+}
+
+// ---------------------------------------------------------------------------
+// Device
+//  - exactly one owner
+//  - at most one seat (null = inventory)
+//  - role primary | secondary; enforce "1 primary per seat" + "primary owner ==
+//    seat occupant" in application logic (see backend prompt).
+// ---------------------------------------------------------------------------
+
+model Device {
+  id              String     @id @default(cuid())
+  name            String
+  type            String
+  inventoryNumber String     @unique
+  mac             String?    @unique
+  role            DeviceRole @default(SECONDARY)
+
+  owner   Member @relation("DeviceOwner", fields: [ownerMemberId], references: [id])
+  ownerMemberId String
+
+  seat   Seat?   @relation(fields: [seatId], references: [id], onDelete: SetNull)
+  seatId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([ownerMemberId])
+  @@index([seatId])
+  // Partial-unique "one primary per seat" cannot be fully expressed in Prisma
+  // schema; enforced via app logic + a raw partial index in a migration:
+  //   CREATE UNIQUE INDEX one_primary_per_seat
+  //   ON "Device"("seatId") WHERE role = 'PRIMARY' AND "seatId" IS NOT NULL;
+}
+
+// ---------------------------------------------------------------------------
+// Seat request / approval flow
+//  User (or anyone) requests a seat -> Manager/Admin approves -> occupant set.
+// ---------------------------------------------------------------------------
+
+model SeatRequest {
+  id     String        @id @default(cuid())
+  status RequestStatus @default(PENDING)
+
+  // Who the seat is being requested FOR
+  subject   Member @relation("RequestSubject", fields: [subjectMemberId], references: [id])
+  subjectMemberId String
+
+  seat   Seat   @relation(fields: [seatId], references: [id], onDelete: Cascade)
+  seatId String
+
+  createdBy   Member @relation("RequestCreatedBy", fields: [createdByMemberId], references: [id])
+  createdByMemberId String
+
+  decidedBy   Member? @relation("RequestDecidedBy", fields: [decidedByMemberId], references: [id])
+  decidedByMemberId String?
+
+  note       String?
+  decidedAt  DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
+  @@index([seatId])
+  @@index([subjectMemberId])
+}
+
+// ---------------------------------------------------------------------------
+// Labels (informational only)
+// ---------------------------------------------------------------------------
+
+model Group {
+  id      String   @id @default(cuid())
+  name    String   @unique
+  color   String   @default("#5B6CF0")
+  seats   Seat[]
+  members Member[]
+
+  createdAt DateTime @default(now())
+}
+
+model Project {
+  id    String @id @default(cuid())
+  code  String @unique
+  name  String
+  seats Seat[]
+
+  createdAt DateTime @default(now())
+}
+
+// ---------------------------------------------------------------------------
+// Audit log
+// ---------------------------------------------------------------------------
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  actorId   String?               // Account.id of who did it
+  action    String                // e.g. "SEAT_ASSIGN", "DEVICE_MOVE", "REQUEST_APPROVE"
+  entity    String                // "Seat" | "Device" | "SeatRequest" ...
+  entityId  String
+  meta      Json?
+  createdAt DateTime @default(now())
+
+  @@index([entity, entityId])
+  @@index([createdAt])
+}

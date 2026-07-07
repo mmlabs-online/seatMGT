@@ -2,7 +2,8 @@
 
 import { useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useAppStore, initials } from "@/store/AppStore";
+import { useAppStore } from "@/store/AppStore";
+import { initials } from "@/lib/format";
 import { ROLE_RANK } from "@/types";
 import { deviceIcon } from "@/lib/icons";
 import { Icon, Avatar } from "@/components/ui";
@@ -12,7 +13,7 @@ import { PickerModal, type PickerItem } from "./PickerModal";
  * URL-addressable seat detail (driven by `?seat=CODE`). Right-side drawer on
  * desktop, bottom sheet on mobile. Actions are gated by the demoed role.
  */
-export function SeatDetailPanel() {
+export function SeatDetailPanel({ editMode = false }: { editMode?: boolean }) {
   const router = useRouter();
   const pathname = usePathname();
   const params = useSearchParams();
@@ -37,6 +38,7 @@ export function SeatDetailPanel() {
   const secondaries = seatDevices.filter((d) => d.role !== "primary");
   const group = store.groupById(occupant?.groupId);
   const project = store.projectById(seat.projectId);
+  const pendingRequest = !occupied ? store.pendingRequestForSeat(seat.id) : undefined;
   const R = store.rank;
 
   // Actions gated by role (presentation-only RBAC).
@@ -64,21 +66,27 @@ export function SeatDetailPanel() {
         variant: "bg-primary text-on-primary",
         onClick: () => setModal("member"),
       });
-    } else if (R >= ROLE_RANK.user) {
+    } else if (!pendingRequest) {
       actions.push({
-        label: "Register myself here",
-        icon: "how_to_reg",
+        label: "Request this seat",
+        icon: "send",
         variant: "bg-primary text-on-primary",
-        onClick: () => store.registerSelf(seat.id),
+        onClick: () => store.requestSeat(seat.id),
       });
     }
   }
 
-  const readOnly = actions.length === 0;
-  const readOnlyText =
-    R === ROLE_RANK.viewer
-      ? "Viewer role — read-only access"
-      : "No actions available for this seat";
+  const readOnly = actions.length === 0 && !pendingRequest;
+  const readOnlyText = "No actions available for this seat";
+
+  const canDeleteSeat = editMode && R >= ROLE_RANK.admin;
+  const seatIsRemovable = !occupied && seatDevices.length === 0;
+
+  const handleDeleteSeat = () => {
+    if (!window.confirm(`Delete seat ${seat.code}? This can't be undone.`)) return;
+    store.deleteSeatAdmin(seat.id);
+    close();
+  };
 
   // Modal data
   const memberItems: PickerItem[] = store.members
@@ -186,6 +194,12 @@ export function SeatDetailPanel() {
                 <div className="text-sm font-semibold">Seat is empty · port available</div>
               </div>
             )}
+            {pendingRequest && (
+              <div className="flex items-center gap-1.5 text-[10px] font-extrabold uppercase tracking-[0.06em] text-status-warn bg-status-warn/10 border border-status-warn/30 px-2.5 py-1 rounded-[7px] mt-2 w-fit">
+                <span className="status-dot warn" aria-hidden />
+                Request pending
+              </div>
+            )}
           </section>
 
           {/* Primary device */}
@@ -281,6 +295,27 @@ export function SeatDetailPanel() {
               <Icon name="visibility" size={18} />
               {readOnlyText}
             </div>
+          )}
+
+          {canDeleteSeat && (
+            <section>
+              <SectionLabel>Layout designer</SectionLabel>
+              {seatIsRemovable ? (
+                <button
+                  type="button"
+                  onClick={handleDeleteSeat}
+                  className="state-layer w-full flex items-center justify-center gap-2 p-3.5 rounded-md3-lg font-bold text-sm cursor-pointer font-[inherit] active:scale-95 transition-transform bg-error-container text-on-error-container"
+                >
+                  <Icon name="delete" size={20} />
+                  Delete seat
+                </button>
+              ) : (
+                <div className="flex items-center gap-2 text-xs text-on-surface-variant font-semibold bg-surface-container p-[10px_14px] rounded-md3-sm">
+                  <Icon name="info" size={18} />
+                  Clear the occupant and devices before deleting this seat.
+                </div>
+              )}
+            </section>
           )}
         </div>
       </aside>

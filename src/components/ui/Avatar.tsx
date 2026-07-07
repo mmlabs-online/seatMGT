@@ -1,4 +1,4 @@
-import { initials } from "@/store/AppStore";
+import { initials } from "@/lib/format";
 
 /** Initial-based circular avatar tinted by the member's group color. */
 export function Avatar({

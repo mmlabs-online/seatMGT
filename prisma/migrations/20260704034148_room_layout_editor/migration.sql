@@ -1,0 +1,9 @@
+-- AlterTable
+ALTER TABLE "Room" ADD COLUMN     "layoutFixtures" JSONB NOT NULL DEFAULT '[]';
+
+-- AlterTable
+ALTER TABLE "Seat" ADD COLUMN     "cannotSeat" BOOLEAN NOT NULL DEFAULT false,
+ADD COLUMN     "col" INTEGER,
+ADD COLUMN     "colSpan" INTEGER NOT NULL DEFAULT 1,
+ADD COLUMN     "row" INTEGER,
+ADD COLUMN     "rowSpan" INTEGER NOT NULL DEFAULT 1;
